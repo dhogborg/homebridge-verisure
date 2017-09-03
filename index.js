@@ -23,8 +23,8 @@ const DEVICE_TYPES = {
   'VOICEBOX1': 'Directenhet'
 }
 
-let VERISURE_TOKEN = null;
-let VERISURE_CALLS = {};
+let VERISURE_TOKEN = null
+let OVERVIEW_PROMISES = {}
 let VERISURE_DEVICE_NAMES = []
 
 
@@ -42,25 +42,24 @@ const getVerisureInstallations = function(config) {
   })
 }
 
-const getOverview = function(installation, callback) {
+const getOverview = function(installation) {
   let giid = installation.giid
-  if (!VERISURE_CALLS.overview) {
-    VERISURE_CALLS.overview = {};
-  }
-  if (!VERISURE_CALLS.overview[giid]) {
-    VERISURE_CALLS.overview[giid] = [];
+  if (OVERVIEW_PROMISES[giid]) {
+    return OVERVIEW_PROMISES[giid]
   }
 
-  VERISURE_CALLS.overview[giid].push(callback);
-  if (VERISURE_CALLS.overview[giid].length > 1) {
-    return;
-  }
-  verisure.overview(VERISURE_TOKEN, installation, function(err, overview) {
-    VERISURE_CALLS.overview[giid].map(function(callback) {
-      callback(err, overview);
+  OVERVIEW_PROMISES[giid] = new Promise(function(resolve, reject) {
+    verisure.overview(VERISURE_TOKEN, installation, function(err, overview) {
+      OVERVIEW_PROMISES[giid] = null;
+      if (err) {
+        reject(err)
+        return
+      }
+      resolve(overview)
     });
-    VERISURE_CALLS.overview[giid] = [];
-  });
+  })
+  
+  return OVERVIEW_PROMISES[giid]
 }
 
 const getUniqueName = function(name) {
@@ -95,9 +94,13 @@ const VerisurePlatform = function(log, config, api) {
       let promises = installations.map(function(installation) {
         return new Promise(function(resolve, reject) {
           verisure.overview(VERISURE_TOKEN, installation, function(err, overview) {
+            if (err) {
+              reject(err)
+              return
+            }
+
             let devices = []
-            if (err) return reject(err);
-            
+          
             if (config.alarmcode && !config.ignore_alarms.includes(installation.giid)) {
               const deviceName = DEVICE_TYPES['ALARM'] || device.deviceType
               const device = new VerisureAccessory(log, {
@@ -175,34 +178,39 @@ const VerisureAccessory = function(log, config) {
   this.service = null;
 }
 
+const ErrAccessoryNotFound = new Error("Accessory not found in overview")
 
 VerisureAccessory.prototype = {
   _getCurrentTemperature: function(callback) {
     this.log(`${this.name} (${this.serialNumber}): Getting current temperature...`);
-    const that = this;
-
-    getOverview(this.installation, function(err, overview) {
-      if (err) return callback(err);
-      overview.climateValues.map(function(device) {
-        if (device.deviceLabel != that.serialNumber) return;
-        that.value = device.temperature;
-        callback(err, that.value);
-      });
-    });
+    getOverview(this.installation).then((overview) => {
+      for (let device of overview.climateValues) {
+        if (device.deviceLabel == this.serialNumber)
+          return device
+      }
+      throw ErrAccessoryNotFound
+    }).then((device) =>{
+      this.value = device.temperature;
+      callback(null, this.value);
+    }).catch((err) => {
+      callback(`${this.name} ${this.serialNumber}: ${err}`)
+    })
 	},
 
   _getSwitchValue: function(callback) {
     this.log(`${this.name} (${this.serialNumber}): Getting current value...`);
-    const that = this;
-
-    getOverview(this.installation, function(err, overview) {
-      if (err) return callback(err);
-      overview.smartPlugs.map(function(device) {
-        if (device.deviceLabel != that.serialNumber) return;
-        that.value = device.currentState == 'ON' ? 1 : 0;
-        callback(err, that.value);
-      });
-    });
+    getOverview(this.installation).then((overview) => {
+      for (let device of overview.smartPlugs) {
+        if (device.deviceLabel == this.serialNumber)
+          return device
+      }
+      throw ErrAccessoryNotFound
+    }).then((device) =>{
+      this.value = device.currentState == 'ON' ? 1 : 0
+      callback(null, this.value);
+    }).catch((err) => {
+      callback(`${this.name} ${this.serialNumber}: ${err}`)
+    })
   },
 
   _setSwitchValue: function(value, callback) {
@@ -258,7 +266,7 @@ VerisureAccessory.prototype = {
 
   _getTargetLockState: function(callback){
     this.log(`${this.name} (${this.serialNumber}): GETTING TARGET LOCK STATE.`);
-
+    
     verisure._apiClient({
         method: 'GET',
         uri: `/installation/${this.installation.giid}/doorlockstate/search`,
@@ -342,13 +350,13 @@ VerisureAccessory.prototype = {
 
   _getCurrentAlarmState: function(callback) {
     this.log(`${this.name}: Getting current alarm state...`);
-    const that = this;
-
-    getOverview(this.installation, function(err, overview) {
+    getOverview(this.installation).then((overview) => {
       if (err) return callback(err);
-      that.value = hapArmState(overview.armState.statusType)
-      callback(err, that.value)
-    });
+      this.value = hapArmState(overview.armState.statusType)
+      callback(null, that.value)
+    }).catch((err) => {
+      callback(`${this.name}: ${err}`)
+    })
   },
 
   _setTargetAlarmState: function(value, callback) {
@@ -492,6 +500,6 @@ const hapArmState = function(verisureArmState) {
   case 'DISARMED':
       return Characteristic.SecuritySystemCurrentState.DISARMED
   default:
-      return Characteristic.SecuritySystemCurrentState.DISARMED
+      throw new Error(`arm state "${verisureArmState}" is not a known state`)
   }
 }
