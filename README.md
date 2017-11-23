@@ -3,6 +3,7 @@
 This is a plugin for [homebridge](https://github.com/nfarina/homebridge). It's a
 working implementation for several Verisure devices:
 
+- [x] __ALARM__ - Arm/Disarm the alarm
 - [x] __DOORLOCK__ - Yale Doorman Lock/Unlock
 - [x] __HUMIDITY1__ - Temperature
 - [x] __SIREN1__ - Temperature
@@ -32,6 +33,8 @@ your array (list) of enabled platform plugins.
     "name" : "Verisure",
     "email": "your@email.com",
     "password": "yourT0p5ecre7Passw0rd",
+    "ignore_alarms": ["00000000000"], // alarm serial no
+    "alarmcode": "0000", // remove or set to false to disable alarm integration
     "doorcode": "000000"
   }
 ]

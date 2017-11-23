@@ -13,6 +13,7 @@ const PLATFORM_NAME = 'verisure';
 const MANUFACTURER = 'Verisure';
 
 const DEVICE_TYPES = {
+  'ALARM': 'Larm',
   'DOORLOCK': 'Yale Doorman',
   'HUMIDITY1': 'Klimatdetektor',
   'SIREN1': 'Siren',
@@ -22,8 +23,8 @@ const DEVICE_TYPES = {
   'VOICEBOX1': 'Directenhet'
 }
 
-let VERISURE_TOKEN = null;
-let VERISURE_CALLS = {};
+let VERISURE_TOKEN = null
+let OVERVIEW_PROMISES = {}
 let VERISURE_DEVICE_NAMES = []
 
 
@@ -41,25 +42,24 @@ const getVerisureInstallations = function(config) {
   })
 }
 
-const getOverview = function(installation, callback) {
+const getOverview = function(installation) {
   let giid = installation.giid
-  if (!VERISURE_CALLS.overview) {
-    VERISURE_CALLS.overview = {};
-  }
-  if (!VERISURE_CALLS.overview[giid]) {
-    VERISURE_CALLS.overview[giid] = [];
+  if (OVERVIEW_PROMISES[giid]) {
+    return OVERVIEW_PROMISES[giid]
   }
 
-  VERISURE_CALLS.overview[giid].push(callback);
-  if (VERISURE_CALLS.overview[giid].length > 1) {
-    return;
-  }
-  verisure.overview(VERISURE_TOKEN, installation, function(err, overview) {
-    VERISURE_CALLS.overview[giid].map(function(callback) {
-      callback(err, overview);
+  OVERVIEW_PROMISES[giid] = new Promise(function(resolve, reject) {
+    verisure.overview(VERISURE_TOKEN, installation, function(err, overview) {
+      if (err) {
+        reject(err)
+        return
+      }
+      resolve(overview)
+      OVERVIEW_PROMISES[giid] = null;
     });
-    VERISURE_CALLS.overview[giid] = [];
-  });
+  })
+  
+  return OVERVIEW_PROMISES[giid]
 }
 
 const getUniqueName = function(name) {
@@ -94,9 +94,26 @@ const VerisurePlatform = function(log, config, api) {
       let promises = installations.map(function(installation) {
         return new Promise(function(resolve, reject) {
           verisure.overview(VERISURE_TOKEN, installation, function(err, overview) {
+            if (err) {
+              reject(err)
+              return
+            }
+
             let devices = []
-            if (err) return reject(err);
-            
+          
+            if (config.alarmcode && !config.ignore_alarms.includes(installation.giid)) {
+              const deviceName = DEVICE_TYPES['ALARM'] || device.deviceType
+              const device = new VerisureAccessory(log, {
+                installation: installation,
+                name: getUniqueName(`${deviceName} (${installation.street})`),
+                model: 'ALARM',
+                serialNumber: installation.giid, // the alarm is part of the installation, not a device with a serial no.
+                alarmcode: config.alarmcode,
+                value: hapArmState(overview.armState.statusType)
+              })
+              devices.push(device)
+            }
+
             devices = devices.concat(overview.climateValues.map(function(device) {
               const deviceName = DEVICE_TYPES[device.deviceType] || device.deviceType
               return new VerisureAccessory(log, {
@@ -161,170 +178,269 @@ const VerisureAccessory = function(log, config) {
   this.service = null;
 }
 
+const ErrAccessoryNotFound = new Error("Accessory not found in overview")
 
 VerisureAccessory.prototype = {
   _getCurrentTemperature: function(callback) {
     this.log(`${this.name} (${this.serialNumber}): Getting current temperature...`);
-    const that = this;
-
-    getOverview(this.installation, function(err, overview) {
-      if (err) return callback(err);
-      overview.climateValues.map(function(device) {
-        if (device.deviceLabel != that.serialNumber) return;
-        that.value = device.temperature;
-        callback(err, that.value);
-      });
-    });
+    getOverview(this.installation).then((overview) => {
+      for (let device of overview.climateValues) {
+        if (device.deviceLabel == this.serialNumber)
+          return device
+      }
+      throw ErrAccessoryNotFound
+    }).then((device) =>{
+      this.value = device.temperature;
+      callback(null, this.value);
+    }).catch((err) => {
+      callback(`${this.name} ${this.serialNumber}: ${err}`)
+    })
 	},
 
   _getSwitchValue: function(callback) {
     this.log(`${this.name} (${this.serialNumber}): Getting current value...`);
-    const that = this;
-
-    getOverview(this.installation, function(err, overview) {
-      if (err) return callback(err);
-      overview.smartPlugs.map(function(device) {
-        if (device.deviceLabel != that.serialNumber) return;
-        that.value = device.currentState == 'ON' ? 1 : 0;
-        callback(err, that.value);
-      });
-    });
+    getOverview(this.installation).then((overview) => {
+      for (let device of overview.smartPlugs) {
+        if (device.deviceLabel == this.serialNumber)
+          return device
+      }
+      throw ErrAccessoryNotFound
+    }).then((device) =>{
+      this.value = device.currentState == 'ON' ? 1 : 0
+      callback(null, this.value);
+    }).catch((err) => {
+      callback(`${this.name} ${this.serialNumber}: ${err}`)
+    })
   },
 
   _setSwitchValue: function(value, callback) {
     this.log(`${this.name} (${this.serialNumber}): Setting current value to "${value}"...`);
     this.value = value;
 
-    verisure._apiClient({
+    apiCall({
       method: 'POST',
       uri: `/installation/${this.installation.giid}/smartplug/state`,
-      headers: {
-        'Cookie': `vid=${VERISURE_TOKEN}`,
-        'Accept': 'application/json, text/javascript, */*; q=0.01'
-      },
-      json: [
-        {
+      json: [{
           deviceLabel: this.serialNumber,
           state: value == 1 ? true : false
-        }
-      ]
-    }, callback);
+        }]
+    }).then(function() {
+      callback(null)
+    }).catch((err) => {
+      this.log.error(err)
+      callback(`${this.name} ${this.serialNumber}: ${err}`)
+    })
   },
 
-  _getCurrentLockState: function(callback){
+  _getCurrentLockState: function(callback) {
     this.log(`${this.name} (${this.serialNumber}): GETTING CURRENT LOCK STATE`);
-    verisure._apiClient({
-        method: 'GET',
-        uri: `/installation/${this.installation.giid}/doorlockstate/search`,
-        headers: {
-          'Cookie': `vid=${VERISURE_TOKEN}`,
-          'Accept': 'application/json, text/javascript, */*; q=0.01'
+    apiCall({
+      uri: `/installation/${this.installation.giid}/doorlockstate/search`
+    }).then((result) => {
+      let {body} = result
+      for (let doorlock of body){
+        if (doorlock.deviceLabel != this.serialNumber){
+          // this is not the droi...*DOOR* you are looking for!
+          continue
         }
-    }, function (callback, error, response){
-      this.log(`**** Response: getCurrentLockState: ${JSON.stringify(response)}`);
-      if (error) callback(error);
-      if (response && response.statusCode == 200){
-        let body = JSON.parse(response.body);
-        for (let doorlock of body){
-          if (doorlock.deviceLabel == this.serialNumber){
-            if (doorlock.motorJam){
-              this.value=Characteristic.LockCurrentState.JAMMED;
-              callback(null, this.value);
-              break;
-            } else {
-              this.value = doorlock.currentLockState == "UNLOCKED" ? Characteristic.LockCurrentState.UNSECURED : Characteristic.LockCurrentState.SECURED ;
-              callback(null, this.value);
-              break;
-            }
-          }
+        if (doorlock.motorJam){
+          return Characteristic.LockCurrentState.JAMMED;
+        }
+        switch (doorlock.currentLockState) {
+          case 'UNLOCKED':
+            return Characteristic.LockCurrentState.UNSECURED
+          default:
+            return Characteristic.LockCurrentState.SECURED
         }
       }
-    }.bind(this, callback));
+      return null
+    }).then((state) => {
+      if (!state) {
+        // the door we are looking for is no longer in the results
+        throw new Error('Doorlock not found')
+      }
+      this.value = state
+      callback(null, state)
+    }).catch((err) => {
+      this.log.error(err)
+      callback(err)
+    })
   },
-
+  
   _getTargetLockState: function(callback){
-    this.log(`${this.name} (${this.serialNumber}): GETTING TARGET LOCK STATE.`);
+    this.log(`${this.name} (${this.serialNumber}): GETTING TARGET LOCK STATE.`)
 
-    verisure._apiClient({
-        method: 'GET',
-        uri: `/installation/${this.installation.giid}/doorlockstate/search`,
-        headers: {
-          'Cookie': `vid=${VERISURE_TOKEN}`,
-          'Accept': 'application/json, text/javascript, */*; q=0.01'
+    apiCall({
+      uri: `/installation/${this.installation.giid}/doorlockstate/search`,
+    }).then((result) => {
+      let {body} = result
+      for (let doorlock of body) {
+        if (doorlock.deviceLabel != this.serialNumber) {
+          continue
         }
-    }, function(callback, error, response){
-      this.log(`**** Response: getTargetLockState: ${JSON.stringify(response)}`);
-      if (error) callback(error);
-      if (response && response.statusCode == 200){
-        let body = JSON.parse(response.body);
-        for (let doorlock of body){
-          if (doorlock.deviceLabel == this.serialNumber) {
-            let targetLockState = doorlock.pendingLockState == "NONE" ? doorlock.currentLockState : doorlock.pendingLockState;
-            callback(error, targetLockState == "UNLOCKED" ? Characteristic.LockTargetState.UNSECURED : Characteristic.LockTargetState.SECURED);
-          }
+        let targetLockState = (doorlock.pendingLockState == "NONE")
+          ? doorlock.currentLockState 
+          : doorlock.pendingLockState
+        
+        switch (targetLockState) {
+          case 'UNLOCKED':
+            return Characteristic.LockTargetState.UNSECURED
+          default:
+            return Characteristic.LockTargetState.SECURED
         }
       }
-
-    }.bind(this, callback));
+    }).then((state) => {
+      if (!state) {
+        // the door we are looking for is no longer in the results
+        throw new Error('Doorlock not found')
+      }
+      callback(null, state)
+    }).catch((err) => {
+      this.log.error(err)
+      callback(err)
+    })
   },
 
   _setTargetLockState: function(value, callback){
     this.log(`${this.name} (${this.serialNumber}): Setting TARGET LOCK STATE to "${value}"`);
+    
     let actionValue = value ? "lock":"unlock";
-    verisure._apiClient({
-      method: 'PUT',
+    apiCall({
+      method: "PUT",
       uri: `/installation/${this.installation.giid}/device/${this.serialNumber}/${actionValue}`,
-      headers: {
-        'Cookie': `vid=${VERISURE_TOKEN}`,
-        'Accept': 'application/json, text/javascript, */*; q=0.01'
-      },
-      json: 
-      {
-          "code": this.config.doorcode
+      json: {
+        "code": this.config.doorcode
       }
-    }, function(value, callback, error, response){
-      this.log(`***** Response from ${actionValue}-operation: ${JSON.stringify(response)}`);
-      if (error != null) callback(error, response);
-      if (response && response.statusCode != 200) {
-        if (response.statusCode == 400 && response.body && response.body.errorCode == "VAL_00819"){
-          this.service.setCharacteristic(Characteristic.LockCurrentState, value)
-          this.value = value;
-          callback (null);
-        } else {
-          callback(response);
-        }
-      } else {
-        this._waitForLockStatusChangeResult(value, callback, response);
+    }).then((result) => {
+      // either wait for the transaction to commit...
+      let id = result.body.doorLockStateChangeTransactionId
+      return this._waitForStatusChangeResult(
+        `/installation/${this.installation.giid}/doorlockstate/change/result/${id}`
+      )
+    }, (result) => {
+      // or inspect the error and try to recover from it
+      let {error, reponse, body} = result
+      switch (response.statusCode) {
+        case 400:
+          if (error.errorCode == "VAL_00819") {
+            // the door is already in the target state
+            return
+          }
+        default:
+          throw error
       }
-    }.bind(this,value,callback))
+    }).then(() => {
+      // either way, we end up with a value (or an error)
+      this.service.setCharacteristic(Characteristic.LockCurrentState, value)
+      this.value = value;
+      callback(null);
+    }).catch((err) => {
+      this.log.error(err)
+      callback(err)
+    })
   },
 
-  _waitForLockStatusChangeResult: function(value, callback, response){
-    setTimeout(function(value, callback, response){
-      verisure._apiClient({
-        method: 'GET',
-        uri: `/installation/${this.installation.giid}/doorlockstate/change/result/${response.body.doorLockStateChangeTransactionId}`,
-        headers: {
-          'Cookie': `vid=${VERISURE_TOKEN}`,
-          'Accept': 'application/json, text/javascript, */*; q=0.01'
-        }
-      }, function(value, origResponse, callback,error,response){
-        if (error != null) 
-          this.log(`**** ERROR: ${JSON.stringify(error)}`);
-        
-        this.log(`**** Response: Doorlockstate: ${JSON.stringify(response)}`);
-        let body = JSON.parse(response.body);
-        if (body.result == "NO_DATA"){
-          this._waitForLockStatusChangeResult(value, callback, origResponse);
-        } else {
-          this.service.setCharacteristic(Characteristic.LockCurrentState, value)
-          this.value = value;
-          callback (null);
-        }
-      }.bind(this, value, response, callback));
-    }.bind(this, value, callback, response)
-    ,200);
+  _getCurrentAlarmState: function(callback) {
+    this.log(`${this.name}: Getting current alarm state...`);
+    getOverview(this.installation).then((overview) => {
+      this.value = hapArmState(overview.armState.statusType)
+      callback(null, this.value)
+    }).catch((err) => {
+      callback(`${this.name}: ${err}`)
+    })
   },
+
+  _setTargetAlarmState: function(value, callback) {
+    let targetState = ""
+    switch (value) {
+    case Characteristic.SecuritySystemTargetState.AWAY_ARM:
+        targetState = 'ARMED_AWAY'
+        break
+    case Characteristic.SecuritySystemTargetState.STAY_ARM:
+    case Characteristic.SecuritySystemTargetState.NIGHT_ARM:
+        targetState = 'ARMED_HOME'
+        break
+    case Characteristic.SecuritySystemTargetState.DISARM:
+        targetState = 'DISARMED'
+        break
+    }
+    
+    this.log(`${this.name} (${this.serialNumber}): Setting TARGET ALARM STATE to ${value} (${targetState})`);
+    apiCall({
+      method: 'PUT',
+      uri: `/installation/${this.installation.giid}/armstate/code`,
+      json: {
+          "code": "" + this.config.alarmcode, // forcibly cast to string
+          "state": targetState
+      }
+    }).then((result) => {
+      // either wait for the transaction to commit...
+      let id = result.body.armStateChangeTransactionId
+      return this._waitForStatusChangeResult(
+        `/installation/${this.installation.giid}/code/result/${id}`
+      )
+    }, (result) => {
+      // or inspect the error and try to recover from it
+      let {error, reponse, body} = result
+      switch (response.statusCode) {
+        case 400:
+          if (error.errorCode == "VAL_00819") { 
+              // the door is already in the target state
+              return
+          }
+        default:
+          throw error
+      }
+    }).then(() => {
+      // either way, we end up with a value (or an error)
+      this.service.setCharacteristic(Characteristic.SecuritySystemCurrentState, value)
+      this.value = value;
+      callback(null);
+    }).catch((err) => {
+      this.log.error(err)
+      callback(err)
+    })
+  },
+
+  // Looks for results of a transaction. 
+  // uri is diffrent depending on which service we are looking at, door, alarm or switch
+  _waitForStatusChangeResult: function(uri){
+    const ErrNoData = new Error("no data")
+    const ErrAttemptsExhasusted = new Error("to many attempts")
+    let retries = 0
+    const getResult = () => {
+        return apiCall({
+          uri: uri,
+        }).then((result) => {
+          let {body} = result
+          if (body.result == 'NO_DATA') {
+            if (retries > 7) {
+              throw ErrAttemptsExhasusted
+            }
+            retries++
+            throw ErrNoData
+          }
+          return body.result
+        })
+    }
+
+    let ref = null
+    return new Promise(function(resolve, reject) {
+      ref = setInterval(function() {
+        getResult().then(function() {
+          resolve()
+        }).catch((err) => {
+          if (err == ErrNoData) {
+            return // let the interval fire again and retry later
+          }
+          reject(err)
+        })
+      }, 200)
+    }).then(function() {
+      clearInterval(ref)
+    })
+  },
+
   getServices: function() {
     const accessoryInformation = new Service.AccessoryInformation();
     accessoryInformation
@@ -357,6 +473,20 @@ VerisureAccessory.prototype = {
       this.service = service;
     }
 
+    if (['ALARM'].includes(this.model)) {
+      service = new Service.SecuritySystem(this.name);
+      service
+        .getCharacteristic(Characteristic.SecuritySystemCurrentState)
+        .on('get', this._getCurrentAlarmState.bind(this))
+
+      service
+        .getCharacteristic(Characteristic.SecuritySystemTargetState)
+        .on('get', this._getCurrentAlarmState.bind(this))
+        .on('set', this._setTargetAlarmState.bind(this))
+      
+      this.service = service;
+    }
+
     if (['HUMIDITY1', 'SIREN1', 'SMARTCAMERA1' ,'SMOKE2', 'VOICEBOX1'].includes(this.model)) {
       service = new Service.TemperatureSensor(this.name);
       service
@@ -370,4 +500,56 @@ VerisureAccessory.prototype = {
 
     return [accessoryInformation, service]
   }
+}
+
+
+const hapArmState = function(verisureArmState) {
+  switch (verisureArmState) {
+  case 'ARMED_AWAY':
+      return Characteristic.SecuritySystemCurrentState.AWAY_ARM
+  case 'ARMED_HOME':
+      return Characteristic.SecuritySystemCurrentState.STAY_ARM
+  case 'DISARMED':
+      return Characteristic.SecuritySystemCurrentState.DISARMED
+  default:
+      throw new Error(`arm state "${verisureArmState}" is not a known state`)
+  }
+}
+
+// Wrap the verisure api call in a promise and set some defaults
+// that can be overridden by options
+const apiCall = function(options) {
+  if (!options.uri) {
+    return Promise.reject("missing option: URL")
+  }
+
+  let _options = {
+    method: 'GET',
+    headers: {
+      'Cookie': `vid=${VERISURE_TOKEN}`,
+      'Accept': 'application/json, text/javascript, */*; q=0.01'
+    }
+  }
+  for (let key in options) {
+    _options[key] = options[key]
+  }
+
+  return new Promise(function(resolve, reject) {
+    verisure._apiClient(_options, function(error, response, body){
+      body = (typeof body == 'string') ? JSON.parse(body) : body
+      if (response.statusCode >= 400) {
+        reject({
+          response: response,
+          error: body,
+          body: null
+        })
+        return
+      }
+      resolve({
+        response: response,
+        error: null,
+        body: body
+      })
+    })
+  })
 }
