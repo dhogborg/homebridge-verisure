@@ -6,6 +6,7 @@
   "keywords": [
     "homebridge-plugin"
   ],
+  "main": "./build/index.js",
   "repository": {
     "type": "git",
     "url": "git://github.com/ptz0n/homebridge-verisure.git"
@@ -13,11 +14,17 @@
   "bugs": {
     "url": "http://github.com/ptz0n/homebridge-verisure/issues"
   },
+  "scripts": {
+    "build": "./node_modules/typescript/bin/tsc -p .tsconfig.json --outDir build"
+  },
   "engines": {
     "node": ">=0.12.0",
     "homebridge": ">=0.2.0"
   },
   "dependencies": {
     "verisure": "^1.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^2.6.1"
   }
 }
