@@ -39,3 +39,9 @@ your array (list) of enabled platform plugins.
   }
 ]
 ```
+
+## Building
+
+Before building you need to install the project dependencies. Yarn is recommended over npm to get fully reproducible builds with correct version for all dependencies. The `yarn.lock` file contains the version hashes. Run `yarn install`.
+
+Building the project from TypeScript is as easy as `yarn run build`. That will use the local version of `tsc` to transpile TypeScript to commonJS.
