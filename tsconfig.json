@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "allowJs": false,
+    "target": "es5",
+    "lib": ["es2016", "dom"],
+
+    "noImplicitAny": true,
+    "noUnusedLocals": true /* Report errors on unused locals. */,
+    "noUnusedParameters": true /* Report errors on unused parameters. */,
+    "noImplicitReturns": true /* Report error when not all code paths in function return a value. */,
+
+    "outDir": "./build"
+  },
+
+  "include": ["./src/**/*"]
+}
