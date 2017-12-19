@@ -1,6 +1,6 @@
 {
-  "name": "homebridge-verisure",
-  "version": "1.6.0",
+  "name": "homebridge-verisure-ts",
+  "version": "1.0.2",
   "description": "Verisure plugin for homebridge: https://github.com/nfarina/homebridge",
   "license": "MIT",
   "keywords": [
@@ -9,10 +9,10 @@
   "main": "./build/index.js",
   "repository": {
     "type": "git",
-    "url": "git://github.com/ptz0n/homebridge-verisure.git"
+    "url": "git://github.com/dhogborg/homebridge-verisure.git"
   },
   "bugs": {
-    "url": "http://github.com/ptz0n/homebridge-verisure/issues"
+    "url": "http://github.com/dhogborg/homebridge-verisure/issues"
   },
   "scripts": {
     "prepublishOnly": "tsc",
@@ -23,7 +23,6 @@
     "homebridge": ">=0.2.0"
   },
   "dependencies": {
-    "request": "^2.83.0",
     "verisure": "^1.2.0"
   },
   "devDependencies": {
