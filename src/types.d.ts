@@ -22,19 +22,19 @@ declare module "verisure" {
     doorLockStatusList: DoorLock[]
     totalSmsCount: number
     climateValues: ClimateValues[]
-    installationErrorList: any[]
+    installationErrorList: any[] // Need example of this
     pendingChanges: number
     ethernetModeActive: boolean
     ethernetConnectedNow: boolean
-    heatPumps: any[]
-    smartCameras: any[]
+    heatPumps: any[] // Need example of this
+    smartCameras: any[] // Need example of this
     latestEthernetStatus: {
       latestEthernetTestResult: boolean
       testDate: Date
       protectedArea: string
       deviceLabel: string
     }
-    customerImageCameras: any[]
+    customerImageCameras: any[] // Need example of this
     batteryProcess: { active: boolean }
     userTracking: {
       installationStatus: boolean
@@ -47,20 +47,17 @@ declare module "verisure" {
         }
       ]
     }
-    eventCounts: any[]
+    eventCounts: any[] // Need example of this
     doorWindow: {
       reportState: boolean
       doorWindowDevice: DoorWindow[]
     }
   }
-  export const enum PlugState {
-    On = "ON",
-    Off = "OFF",
-  }
-  export const enum PendingPlugState {
-    On = "ON",
-    Off = "OFF",
-    None = "NONE",
+  export interface ArmState {
+    statusType: AlarmArmState
+    date: Date
+    name: string
+    changedVia: string
   }
   export interface ControlPlug {
     deviceId: string
@@ -78,17 +75,17 @@ declare module "verisure" {
     currentState: PlugState
     pendingState: PendingPlugState
   }
-
-  export const enum AlarmArmState {
-    Away = "ARMED_AWAY",
-    Home = "ARMED_HOME",
-    Disarmed = "DISARMED",
-  }
-  export interface ArmState {
-    statusType: AlarmArmState
-    date: Date
-    name: string
-    changedVia: string
+  export interface DoorLock {
+    deviceLabel: string
+    area: string
+    method: DoorLockMethod
+    lockedState: DoorLockState
+    currentLockState: DoorLockState
+    pendingLockState: PendingDoorLockState
+    eventTime: Date
+    secureModeActive: boolean
+    motorJam: boolean
+    paired: boolean
   }
   export interface ClimateValues {
     deviceLabel: string
@@ -98,29 +95,24 @@ declare module "verisure" {
     humidity: number
     time: Date
   }
-
-  // Door lock
-  export const enum DoorLockState {
-    Locked = "LOCKED",
-    Unlocked = "UNLOCKED",
+  export interface User {
+    name: string
+    status: string
+    webAccount: string
+    isCallingUser: boolean
+    deviceId: string
+    currentLocationId: string
+    currentLocationName: string
+    currentLocationTimestamp: Date
   }
-  export const enum PendingDoorLockState {
-    Locked = "LOCKED",
-    Unlocked = "UNLOCKED",
-    None = "NONE",
-  }
-  export interface DoorLock {
+  export interface DoorWindow {
     deviceLabel: string
     area: string
-    method: string
-    lockedState: DoorLockState
-    currentLockState: DoorLockState
-    pendingLockState: PendingDoorLockState
-    eventTime: Date
-    secureModeActive: boolean
-    motorJam: boolean
-    paired: boolean
+    state: DoorWindowState
+    wired: boolean
+    reportTime: Date
   }
+
   export interface DoorLockRequestResponse {
     zone: string
     deviceLabel: string
@@ -137,27 +129,37 @@ declare module "verisure" {
     paired: boolean
   }
 
-  export interface User {
-    name: string
-    status: string
-    webAccount: string
-    isCallingUser: boolean
-    deviceId: string
-    currentLocationId: string
-    currentLocationName: string
-    currentLocationTimestamp: Date
+  export const enum PlugState {
+    On = "ON",
+    Off = "OFF",
   }
-
+  export const enum PendingPlugState {
+    On = "ON",
+    Off = "OFF",
+    None = "NONE",
+  }
+  export const enum AlarmArmState {
+    Away = "ARMED_AWAY",
+    Home = "ARMED_HOME",
+    Disarmed = "DISARMED",
+  }
+  export const enum DoorLockMethod {
+    Auto = "AUTO",
+    Code = "CODE",
+    Thumb = "THUMB", // Manual knob on door
+  }
+  export const enum DoorLockState {
+    Locked = "LOCKED",
+    Unlocked = "UNLOCKED",
+  }
+  export const enum PendingDoorLockState {
+    Locked = "LOCKED",
+    Unlocked = "UNLOCKED",
+    None = "NONE",
+  }
   export const enum DoorWindowState {
     Close = "CLOSE",
     Open = "OPEN",
-  }
-  export interface DoorWindow {
-    deviceLabel: string
-    area: string
-    state: DoorWindowState
-    wired: boolean
-    reportTime: Date
   }
 
   export function auth(
