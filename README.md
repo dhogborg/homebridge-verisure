@@ -14,8 +14,10 @@ working implementation for several Verisure devices:
 
 ## Installation
 
+This fork has it's own published package that allows testing it during it's active development phase.
+
 ```bash
-npm install -g homebridge-verisure
+npm install -g homebridge-verisure-ts
 ```
 
 Now you can update your configuration file to enable the plugin, see sample
